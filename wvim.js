@@ -1,3 +1,18 @@
+const $ = document.querySelector.bind(document);
+
+// This is used to get the heigth and width of each char
+// so we can calculate where to put the cursor
+// yeah i know it's ugly but i don't think there's other way to do it
+const tempElement = document.createElement('div');
+tempElement.innerText = 'a';
+tempElement.style.display = 'inline-block';
+
+$('body').appendChild(tempElement);
+const charHeight = tempElement.clientHeight;
+const charWidth = tempElement.clientWidth;
+const letterSpacing = tempElement.style.letterSpacing;
+$('body').removeChild(tempElement);
+
 const BufferManager = {
     buffer: [],
 
@@ -86,7 +101,8 @@ const BufferManager = {
     },
 
     getRowLength(row) {
-        BufferManager.createRowIfNotExists(row);
+        if(BufferManager.buffer[row] == undefined) return;
+
         return BufferManager.buffer[row].length;
     },
 
@@ -94,10 +110,42 @@ const BufferManager = {
         if(BufferManager.doRowExist(row)) {
             const buffer = BufferManager.buffer.slice(0);
             return buffer[row]
+                .map(e => e && e.innerText ? `<span id="cursor" class="${ModeManager.currentMode}">${e.innerText}</span>` : e)
                 .map(char => char === ' ' ? '&nbsp;' : char)
                 .map(char => char === 'Tab' ? '&#9;' : char)
                 .join('');
         }
+    },
+
+    removeCursor() {
+        const { row, col } = CursorManager.getCursorPosition();
+        if(BufferManager.buffer[row] == undefined || BufferManager.buffer[row][col] == undefined || !BufferManager.buffer[row][col].innerText) return;
+
+        if(!BufferManager.buffer[row][col].shouldRender) {
+            BufferManager.spliceRow(row, col, 1);
+            return;
+        }
+
+        const temp = BufferManager.buffer[row][col].innerText;
+        BufferManager.buffer[row][col] = temp;
+    },
+
+    updateCursor() {
+        const { row, col } = CursorManager.getCursorPosition();
+        if(BufferManager.buffer[row][col] && BufferManager.buffer[row][col].innerText != undefined) return;
+
+        const cursor = {
+            innerText: BufferManager.buffer[row][col] || ' ',
+            shouldRender: true,
+        }
+
+        if(!BufferManager.buffer[row][col]) {
+            cursor.innerText = ' ';
+            cursor.shouldRender = false;
+        }
+
+
+        BufferManager.buffer[row][col] = cursor;
     }
 }
 
@@ -113,21 +161,29 @@ const CursorManager = {
     },
 
     moveLeft(n) {
-        CursorManager.col = Math.max(CursorManager.col - n, 0);
+        Utils.updateCursor(() => {
+            CursorManager.col = Math.max(CursorManager.col - n, 0);
+        });
     },
 
     moveDown(n) {
-        CursorManager.row = Math.min(BufferManager.getBufferLength(), CursorManager.row + n);
-        CursorManager.col = Math.min(BufferManager.getRowLength(CursorManager.row), CursorManager.col);
+        Utils.updateCursor(() => {
+            CursorManager.row = Math.min(BufferManager.getBufferLength(), CursorManager.row + n);
+            CursorManager.col = Math.min(BufferManager.getRowLength(CursorManager.row), CursorManager.col);
+        });
     },
 
     moveUp(n) { 
-        CursorManager.row = Math.max(CursorManager.row - n, 0);
-        CursorManager.col = Math.min(BufferManager.getRowLength(CursorManager.row), CursorManager.col);
+        Utils.updateCursor(() => {
+            CursorManager.row = Math.max(CursorManager.row - n, 0);
+            CursorManager.col = Math.min(BufferManager.getRowLength(CursorManager.row), CursorManager.col);
+        });
     },
 
     moveRigth(n) {
-        CursorManager.col = Math.min(BufferManager.getRowLength(CursorManager.row), CursorManager.col + n);
+        Utils.updateCursor(() => {
+            CursorManager.col = Math.min(BufferManager.getRowLength(CursorManager.row), CursorManager.col + n);
+        });
     }
 }
 
@@ -136,8 +192,15 @@ const ModeManager = {
     currentMode: 'normal',
 
     enterNormalMode() {
+        const { row, col } = CursorManager.getCursorPosition();
         CursorManager.moveLeft(1);
         ModeManager.currentMode = 'normal';
+        DOMManager.updateModeString();
+
+        if(Utils.isCursor(BufferManager.buffer[row][col])
+            && !BufferManager.buffer[row][col].shouldRender) {
+            BufferManager.removeCursor();
+        }
     },
 
     insertModePositions: {
@@ -156,6 +219,7 @@ const ModeManager = {
             pos();
             ModeManager.currentMode = 'insert';
         }
+        DOMManager.updateModeString();
     },
 
     handleInput(key) {
@@ -168,8 +232,7 @@ const ModeManager = {
     normalSpecialKeys: {
         'h': () => CursorManager.moveLeft(1, ModeManager.currentMode),
 
-        'j': () => {
-            const { row } = CursorManager.getCursorPosition();
+        'j': () => { const { row } = CursorManager.getCursorPosition();
             const length = BufferManager.getBufferLength();
 
             if(row + 1 < length) {
@@ -196,19 +259,18 @@ const ModeManager = {
         'Escape': () => ModeManager.enterNormalMode(),
 
         'Enter': () => {
+            // All these bois here need to be in that exact order
             const {row,col} = CursorManager.getCursorPosition();
-            if(!BufferManager.isBufferEmpty()) {
-                CursorManager.moveDown(1);
-            }
-
             BufferManager.createRow(row + 1);
-            Utils.pprint(BufferManager.buffer);
 
             const afterCursor = BufferManager.sliceRow(row, col);
-            if(afterCursor.length != 0) {
+            console.log()
+            if(afterCursor.length > 0 && !(Utils.isCursor(afterCursor[0]) && !afterCursor[0].shouldRender)) {
                 BufferManager.spliceRow(row, col);
                 BufferManager.appendList(row + 1, afterCursor);
             }
+
+            CursorManager.moveDown(1);
         },
 
         'Backspace': () => {
@@ -217,9 +279,13 @@ const ModeManager = {
             if(!BufferManager.doRowExist(row)) return;
 
             if(BufferManager.removeRowIfEmpty(row)) {
+                if(row - 1 < 0) return;
+
                 const l = BufferManager.getRowLength(row - 1);
+
                 CursorManager.moveUp(1);
                 CursorManager.moveRigth(l);
+
                 return;
             }
 
@@ -243,7 +309,8 @@ const ModeManager = {
             specialKeyAction();
         }
     },
-insert(key) {
+
+    insert(key) {
         const specialAction = ModeManager.insertSpecialKeys[key];
         if(specialAction) {
             specialAction();
@@ -256,6 +323,11 @@ insert(key) {
 }
 
 const Utils = {
+    isCursor(e) {
+        if(!e) return false;
+        return e.innerText != undefined && e.shouldRender != undefined;
+    },
+
     arraysEqual(a, b) {
         if(!a || !b) return false;
         if(a === b) return true;
@@ -281,14 +353,24 @@ const Utils = {
             console.log(BufferManager.getRowString(i));
 
         console.log(']');
+    },
+
+    updateCursor(cb) {
+        BufferManager.removeCursor();
+        cb();
+        DOMManager.updateCursorPosition();
+        BufferManager.updateCursor();
     }
 }
 
 const DOMManager = {
-    editor: document.querySelector('#editor'),
+    mode: $('#mode'),
+    cursor: $('#cursor'),
+    cursorPosition: $('#cursor-position'),
+    editor: $('#editor'),
     nodes: [],
 
-    lineNumbersContainer: document.querySelector('#line-numbers'),
+    lineNumbersContainer: $('#line-numbers'),
     lineNumbers: [],
 
     renderHTML() {
@@ -317,47 +399,26 @@ const DOMManager = {
                 children[row].innerHTML = BufferManager.getRowString(row);
             }
         }
-
-        const lineNumbers = DOMManager.lineNumbers;
-        const lineChildren = DOMManager.lineNumbersContainer.children;
-
-        for(let i = 0; i < Math.max(nodes.length, lineNumbers.length); i++) {
-            if(lineNumbers[i] == undefined && nodes[i]) {
-                lineNumbers.splice(i, 0, i);
-
-                const lineNumberHTML = DOMManager.getLineNumberHTML(i + 1);
-                if(lineChildren[i] != undefined && lineChildren[i].nextSibling) {
-                    DOMManager.lineNumbersContainer.insertBefore(lineNumberHTML, lineChildren[row].nextSibling);
-                } else {
-                    DOMManager.lineNumbersContainer.appendChild(lineNumberHTML);
-                }
-
-            } else if(lineNumbers[i] != undefined && !nodes[i]) {
-                lineNumbers.splice(i, 1);
-                DOMManager.lineNumbersContainer.removeChild(lineChildren[i]);
-
-            } else if(lineNumbers[i] != i) {
-                lineNumber[i] = i;
-                lineChildren[i].innerHTML = i + 1;
-                alert('sssssssssssss');
-            }
-        }
     },
 
     getRowHTML(row) {
-        const div = document.createElement('div');
-        div.innerHTML = BufferManager.getRowString(row);
+        const li = document.createElement('li');
+        li.innerHTML = BufferManager.getRowString(row);
 
-        return div;
+        return li;
     },
 
-    getLineNumberHTML(i) {
-        const div = document.createElement('div');
-        div.innerHTML = i;
+    updateCursorPosition() {
+        const { row, col } = CursorManager.getCursorPosition();
+        const positionText = `${col},${row}`;
 
-        return div;
+        DOMManager.cursorPosition.innerText = positionText;
+    },
+
+    updateModeString() {
+        DOMManager.mode.innerText = ModeManager.currentMode != 'normal' ? `--${ModeManager.currentMode}--` : '';
     }
-} 
+}
 
 document.addEventListener('keydown', e => {
     e.preventDefault();
