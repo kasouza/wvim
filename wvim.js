@@ -13,8 +13,279 @@ const charWidth = tempElement.clientWidth;
 const letterSpacing = tempElement.style.letterSpacing;
 $('body').removeChild(tempElement);
 
+const FileManager = {
+    currentFile: null,
+
+    hasFileOpen() {
+        return FileManager.currentFile != null;
+    },
+
+    loadOrCreateFile(filename) {
+        const buffer = JSON.parse(localStorage.getItem(filename) || null);
+        if(buffer) {
+            BufferManager.buffer = buffer;
+            FileManager.currentFile = filename;
+
+        } else {
+            FileManager.createFile(filename);
+        }
+    },
+
+    createFile(filename) {
+        FileManager.currentFile = filename;
+        FileManager.saveFile();
+    },
+
+    loadFile(filename) {
+        const buffer = JSON.parse(localStorage.getItem(filename) || null);
+        if(buffer) {
+            BufferManager.buffer = buffer;
+            FileManager.currentFile = filename;
+        } else {
+            alert(`Couldn't load file: ${filename}`);
+        }
+    },
+
+    saveFile() {
+        if(FileManager.currentFile == null) {
+            alert('Please, create/load a file before saving');
+
+        } else {
+            localStorage.setItem(FileManager.currentFile, JSON.stringify(Utils.getBufferWithoutCursor(BufferManager.buffer)));
+        }
+    },
+
+    downloadFile() {
+        const parsedBuffer = Parser.parseBuffer(BufferManager.buffer);
+        const a = document.createElement('a');
+        a.href = 'data:text/plain;charset=UTF-8,' + encodeURIComponent(parsedBuffer)
+        a.download = FileManager.currentFile;
+
+        $('body').appendChild(a);
+        a.click();
+        $('body').removeChild(a);
+    },
+
+    quit() {
+        FileManager.currentFile = null;
+    }
+};
+
+const Parser = {
+    parseBuffer(bufferIn) {
+        let result = '';
+        for(const row of bufferIn) {
+            for(const char of row) {
+                result += char;
+            }
+            result += '\n';
+        }
+
+        return result;
+    },
+
+    parseCommand(commandIn, commandsObj, separator) {
+        const commandList = commandIn.split(separator);
+        let result = {};
+
+        for(const commandString of commandList) {
+            const command = commandsObj[commandString];
+            if(command) {
+                let params = [];
+                if(command.hasParams) {
+                    params = commandList.filter(x => x !== commandString);
+                }
+
+                // If more than one command found
+                // returns undefined
+                if(!result.command && !result.params) {
+                    result.command = command;
+                    result.params = params;
+                }
+            }
+        }
+
+        return Object.keys(result).length == 0 ? null : result;
+    },
+};
+
+const NormalCommands = {
+    'h': {
+        hasParams: true,
+        paramCount: 1,
+
+        exec(x) {
+            const n = parseInt(x) || 1;
+            CursorManager.moveLeft(n, ModeManager.currentMode);
+        },
+    },
+
+    'j': {
+        hasParams: true,
+        paramCount: 1,
+
+        exec(x) {
+            const n = parseInt(x) || 1;
+            CursorManager.moveDown(n, ModeManager.currentMode);
+        },
+    },
+
+    'k': {
+        hasParams: true,
+        paramCount: 1,
+
+        exec(x) {
+            const n = parseInt(x) || 1;
+            CursorManager.moveUp(n, ModeManager.currentMode);
+        },
+    },
+
+    'l': {
+        hasParams: true,
+        paramCount: 1,
+
+        exec(x) {
+            const n = parseInt(x) || 1;
+            const { row, col } = CursorManager.getCursorPosition();
+            const length = BufferManager.getRowLength(row) 
+            if(n + col < length) {
+                CursorManager.moveRigth(n, ModeManager.currentMode);
+            }
+        },
+    },
+
+    'i': {
+        hasParams: false,
+        paramCount: 0,
+
+        exec() {
+            ModeManager.enterInsertMode('before');
+        },
+    },
+
+    'a': {
+        hasParams: false,
+        paramCount: 0,
+
+        exec() {
+            ModeManager.enterInsertMode('after');
+        },
+    },
+    
+    ':': {
+        hasParams: false,
+        paramCount: 0,
+
+        exec: () => ModeManager.enterCommandMode(),
+    }
+};
+
+const Commands = {
+    w: {
+        hasParams: false,
+        paramCount: 0,
+        
+        exec: FileManager.saveFile,
+    },
+
+    wd: {
+        hasParams: false,
+        paramCount: 0,
+        
+        exec() {
+            FileManager.saveFile();
+            FileManager.downloadFile();
+        },
+    },
+
+    q: {
+        hasParams: false,
+        paramCount: 0,
+
+        exec() {
+            BufferManager.clear();
+            FileManager.quit();
+            CursorManager.reset();
+        },
+    },
+
+    wq: {
+        hasparams: false,
+        paramsCount: 0,
+
+        exec() {
+            Commands.w.exec();
+            Commands.q.exec();
+        }
+    },
+
+    edit: {
+        hasParams: true,
+        paramCount: 1,
+        
+        exec: filename => {
+            FileManager.loadOrCreateFile(filename);
+            CursorManager.reset();
+        }
+    },
+};
+
+function createBufferManager(defaultValue, eval) {
+    return Object.create({
+        buffer: defaultValue,
+        defaultValue,
+        eval,
+
+        append(char) {
+            this.buffer += char;
+        },
+
+        pop() {
+            this.buffer = this.buffer.slice(0, -1);
+        },
+
+        isEmpty() {
+            return this.buffer.length == 0;
+        },
+
+        clear() {
+            this.buffer = this.defaultValue;
+        }
+    });
+}
+
+const NormalBufferManager = createBufferManager('', () => {
+    const cmdObj = Parser.parseCommand(NormalBufferManager.buffer, NormalCommands, '');
+    if(cmdObj && cmdObj.command && cmdObj.params) {
+        cmdObj.command.exec(cmdObj.params.join(''));
+        NormalBufferManager.clear();
+    } else {
+        // Handler error comand invalid or somethingA
+    }
+});
+
+const CommandBufferManager = createBufferManager(':', () => {
+    // Reads from CommandBufferManager.buffer and execute the command
+    // if possible
+    const cmdObj = Parser.parseCommand(CommandBufferManager.buffer.slice(1), Commands, ' ');
+    if(cmdObj && cmdObj.command && cmdObj.params) {
+        cmdObj.command.exec(...cmdObj.params);
+
+    } else {
+        // Handler error comand invalid or somethingA
+    }
+});
+
 const BufferManager = {
     buffer: [],
+
+    isRowEmpty(row) {
+        return BufferManager.buffer[row].length == 0;
+    },
+
+    clear() {
+        BufferManager.buffer = [];
+    },
 
     isBufferEmpty() {
         return BufferManager.buffer.length == 0;
@@ -132,7 +403,8 @@ const BufferManager = {
 
     updateCursor() {
         const { row, col } = CursorManager.getCursorPosition();
-        if(BufferManager.buffer[row][col] && BufferManager.buffer[row][col].innerText != undefined) return;
+        if(!BufferManager.buffer[row] ||
+            (BufferManager.buffer[row][col] && BufferManager.buffer[row][col].innerText != undefined)) return;
 
         const cursor = {
             innerText: BufferManager.buffer[row][col] || ' ',
@@ -147,11 +419,16 @@ const BufferManager = {
 
         BufferManager.buffer[row][col] = cursor;
     }
-}
+};
 
 const CursorManager = {
     col: 0,
     row: 0,
+
+    reset() {
+        CursorManager.col = 0;
+        CursorManager.row = 0;
+    },
 
     getCursorPosition() {
         return {
@@ -168,15 +445,27 @@ const CursorManager = {
 
     moveDown(n) {
         Utils.updateCursor(() => {
-            CursorManager.row = Math.min(BufferManager.getBufferLength(), CursorManager.row + n);
-            CursorManager.col = Math.min(BufferManager.getRowLength(CursorManager.row), CursorManager.col);
+            CursorManager.row = Math.min(BufferManager.getBufferLength() - 1, CursorManager.row + n);
+
+            let rowLength = BufferManager.getRowLength(CursorManager.row)
+            if(!BufferManager.isRowEmpty(CursorManager.row)) {
+                rowLength -= 1;
+            }
+
+            CursorManager.col = Math.min(rowLength, CursorManager.col);
         });
     },
 
     moveUp(n) { 
         Utils.updateCursor(() => {
             CursorManager.row = Math.max(CursorManager.row - n, 0);
-            CursorManager.col = Math.min(BufferManager.getRowLength(CursorManager.row), CursorManager.col);
+
+            let rowLength = BufferManager.getRowLength(CursorManager.row)
+            if(!BufferManager.isRowEmpty(CursorManager.row)) {
+                rowLength -= 1;
+            }
+
+            CursorManager.col = Math.min(rowLength, CursorManager.col);
         });
     },
 
@@ -185,21 +474,82 @@ const CursorManager = {
             CursorManager.col = Math.min(BufferManager.getRowLength(CursorManager.row), CursorManager.col + n);
         });
     }
-}
+};
 
 const ModeManager = {
-    modes: ['normal', 'insert'],
+    modes: ['normal', 'insert', 'command'],
     currentMode: 'normal',
+
+    excludedKeys: [
+        'Shift', 'Tab', 'Alt', 'CapsLock', 'End', 'Home',
+        'ArrowLeft', 'ArrowUp', 'ArrowRight', 'ArrowDown',
+        'Delete', 'Insert', 'Dead', 'Control', 'AltGraph',
+        'PageDown', 'PageUp', 'NumLock', 'Unidentified',
+
+    ],
+
+    handleInput(key) {
+        const mode = ModeManager[ModeManager.currentMode];
+        if(mode && !ModeManager.excludedKeys.includes(key)) {
+            mode(key);
+        }
+    },
+
+    enterCommandMode() {
+        ModeManager.currentMode = 'command';
+        BufferManager.removeCursor();
+    },
 
     enterNormalMode() {
         const { row, col } = CursorManager.getCursorPosition();
-        CursorManager.moveLeft(1);
         ModeManager.currentMode = 'normal';
-        DOMManager.updateModeString();
 
-        if(Utils.isCursor(BufferManager.buffer[row][col])
+        if(!BufferManager.isBufferEmpty() && Utils.isCursor(BufferManager.buffer[row][col])
             && !BufferManager.buffer[row][col].shouldRender) {
             BufferManager.removeCursor();
+        } 
+        BufferManager.updateCursor();
+    },
+
+    enterInsertMode(positionIn) {
+        if(!FileManager.hasFileOpen()) {
+            alert(`Please, open a file with before start editing.
+                Use :edit <filename>`);
+            return;
+        }
+
+        if(BufferManager.isBufferEmpty()) {
+            BufferManager.createRow();
+        }
+
+        const pos = ModeManager.insertModePositions[positionIn];
+        if(pos) {
+            pos();
+            ModeManager.currentMode = 'insert';
+        }
+    },
+
+    command(key) {
+        const specialKeyAction = ModeManager.commandSpecialKeys[key];
+        if(specialKeyAction) {
+            specialKeyAction();
+        } else {
+            CommandBufferManager.append(key);
+        }
+    },
+
+    normal(key) {
+        NormalBufferManager.append(key);
+        NormalBufferManager.eval();
+    },
+
+    insert(key) {
+        const specialAction = ModeManager.insertSpecialKeys[key];
+        if(specialAction) {
+            specialAction();
+        } else {
+            BufferManager.insertCharAt(key, CursorManager.getCursorPosition());
+            CursorManager.moveRigth(1);
         }
     },
 
@@ -213,50 +563,33 @@ const ModeManager = {
         },
     },
 
-    enterInsertMode(positionIn) {
-        const pos = ModeManager.insertModePositions[positionIn];
-        if(pos) {
-            pos();
-            ModeManager.currentMode = 'insert';
-        }
-        DOMManager.updateModeString();
-    },
-
-    handleInput(key) {
-        const mode = ModeManager[ModeManager.currentMode];
-        if(mode) {
-            mode(key);
-        }
-    },
-
-    normalSpecialKeys: {
-        'h': () => CursorManager.moveLeft(1, ModeManager.currentMode),
-
-        'j': () => { const { row } = CursorManager.getCursorPosition();
-            const length = BufferManager.getBufferLength();
-
-            if(row + 1 < length) {
-                CursorManager.moveDown(1, ModeManager.currentMode);
-            }
+    commandSpecialKeys: {
+        'Escape': () => {
+            ModeManager.enterNormalMode();
+            CommandBufferManager.clear();
         },
 
-        'k': () => CursorManager.moveUp(1, ModeManager.currentMode),
-
-        'l': () => {
-            const { col, row } = CursorManager.getCursorPosition();
-            const length = BufferManager.getRowLength(row);
-
-            if(col + 1 < length) {
-                CursorManager.moveRigth(1, ModeManager.currentMode);
-            }
+        'Enter': () => {
+            CommandBufferManager.eval();
+            ModeManager.enterNormalMode();
+            CommandBufferManager.clear();
         },
 
-        'i': () => ModeManager.enterInsertMode('before'),
-        'a': () => ModeManager.enterInsertMode('after'),
+        'Backspace': () => {
+            CommandBufferManager.pop();
+
+            if(CommandBufferManager.isEmpty()) {
+                ModeManager.enterNormalMode();
+                CommandBufferManager.clear();
+            }
+        },
     },
 
     insertSpecialKeys: {
-        'Escape': () => ModeManager.enterNormalMode(),
+        'Escape': () => {
+            CursorManager.moveLeft(1);
+            ModeManager.enterNormalMode();
+        },
 
         'Enter': () => {
             // All these bois here need to be in that exact order
@@ -264,10 +597,10 @@ const ModeManager = {
             BufferManager.createRow(row + 1);
 
             const afterCursor = BufferManager.sliceRow(row, col);
-            console.log()
             if(afterCursor.length > 0 && !(Utils.isCursor(afterCursor[0]) && !afterCursor[0].shouldRender)) {
                 BufferManager.spliceRow(row, col);
                 BufferManager.appendList(row + 1, afterCursor);
+                CursorManager.moveLeft(BufferManager.getRowLength(row));
             }
 
             CursorManager.moveDown(1);
@@ -279,7 +612,7 @@ const ModeManager = {
             if(!BufferManager.doRowExist(row)) return;
 
             if(BufferManager.removeRowIfEmpty(row)) {
-                if(row - 1 < 0) return;
+                if(row === 0) return;
 
                 const l = BufferManager.getRowLength(row - 1);
 
@@ -302,25 +635,7 @@ const ModeManager = {
             }
         }
     },
-
-    normal(key) {
-        const specialKeyAction = ModeManager.normalSpecialKeys[key];
-        if(specialKeyAction) {
-            specialKeyAction();
-        }
-    },
-
-    insert(key) {
-        const specialAction = ModeManager.insertSpecialKeys[key];
-        if(specialAction) {
-            specialAction();
-            return;
-        }
-
-        BufferManager.insertCharAt(key, CursorManager.getCursorPosition());
-        CursorManager.moveRigth(1);
-    }
-}
+};
 
 const Utils = {
     isCursor(e) {
@@ -355,16 +670,20 @@ const Utils = {
         console.log(']');
     },
 
+    getBufferWithoutCursor(buffer) {
+        return buffer.map(e => Utils.isCursor(e) ? e.innerText : e);
+    },
+
     updateCursor(cb) {
         BufferManager.removeCursor();
         cb();
-        DOMManager.updateCursorPosition();
         BufferManager.updateCursor();
     }
-}
+};
 
 const DOMManager = {
-    mode: $('#mode'),
+    filename: $('#filename'),
+    command: $('#command'),
     cursor: $('#cursor'),
     cursorPosition: $('#cursor-position'),
     editor: $('#editor'),
@@ -377,8 +696,7 @@ const DOMManager = {
         const nodes = DOMManager.nodes;
         const buffer = BufferManager.buffer;
 
-        const children = DOMManager.editor.children;
-
+        const children = DOMManager.editor.children; 
         for(let row = 0; row < Math.max(nodes.length, buffer.length); row++) {
             if(nodes[row] == undefined && buffer[row] != undefined) {
                 nodes.splice(row, 0, buffer[row].slice(0));
@@ -399,6 +717,11 @@ const DOMManager = {
                 children[row].innerHTML = BufferManager.getRowString(row);
             }
         }
+
+
+        DOMManager.updateCommandString();
+        DOMManager.updateCursorPosition();
+        DOMManager.updateFilename();
     },
 
     getRowHTML(row) {
@@ -410,14 +733,28 @@ const DOMManager = {
 
     updateCursorPosition() {
         const { row, col } = CursorManager.getCursorPosition();
-        const positionText = `${col},${row}`;
+        const positionText = `${col + 1},${row + 1}`;
 
         DOMManager.cursorPosition.innerText = positionText;
     },
 
-    updateModeString() {
-        DOMManager.mode.innerText = ModeManager.currentMode != 'normal' ? `--${ModeManager.currentMode}--` : '';
+    updateCommandString() {
+        if(ModeManager.currentMode != 'command') {
+            DOMManager.command.innerText = ModeManager.currentMode != 'normal' ? `--${ModeManager.currentMode}--` : '';
+
+        } else {
+            DOMManager.command.innerText = CommandBufferManager.buffer;
+        }
+    },
+
+    updateFilename() {
+        DOMManager.filename.innerText = FileManager.currentFile || '';
     }
+};
+
+if(BufferManager.isBufferEmpty()) {
+    BufferManager.createRow();
+    DOMManager.renderHTML();
 }
 
 document.addEventListener('keydown', e => {
@@ -425,3 +762,9 @@ document.addEventListener('keydown', e => {
     ModeManager.handleInput(e.key);
     DOMManager.renderHTML();
 });
+
+// TODO change the way keys are 'captured'
+//document.addEventListener('keypress', e => {
+//    e.preventDefault();
+//    console.log(e);
+//});
