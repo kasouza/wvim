@@ -1,18 +1,5 @@
 const $ = document.querySelector.bind(document);
 
-// This is used to get the heigth and width of each char
-// so we can calculate where to put the cursor
-// yeah i know it's ugly but i don't think there's other way to do it
-const tempElement = document.createElement('div');
-tempElement.innerText = 'a';
-tempElement.style.display = 'inline-block';
-
-$('body').appendChild(tempElement);
-const charHeight = tempElement.clientHeight;
-const charWidth = tempElement.clientWidth;
-const letterSpacing = tempElement.style.letterSpacing;
-$('body').removeChild(tempElement);
-
 const FileManager = {
     currentFile: null,
 
