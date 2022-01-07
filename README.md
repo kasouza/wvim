@@ -5,7 +5,7 @@ It's basically a way worst version of vim!!!
 
 It is a modal editor (normal, insertion and command modes) and <strike>amazingly</strike> it's also possible to edit mutiple buffers at the same time!
 
-Take a look ate it!
+Take a look at it!
 
 <p align="center">
   <img src="example.gif" />
